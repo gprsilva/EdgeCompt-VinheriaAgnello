@@ -1,0 +1,137 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <DHT.h>
+#include <ArduinoJson.h>  
+ 
+#define DHTPIN 4
+#define DHTTYPE DHT11
+#define LED_PIN 18
+#define LDR_PIN 34 // Pino do Sensor de Luminosidade
+ 
+const char* ssid = "FIAP-IOT";          // Opção hardware
+const char* password = "F!@p25.IOT";    // Senha da rede Wi-Fi
+const char* mqtt_server = "3.135.234.101";
+ 
+const char* topico_telemetria = "/TEF/device033/attrs";   // ID ajustado
+const char* topico_comando = "/TEF/device033/cmd";        // ID ajustado      
+ 
+DHT dht(DHTPIN, DHTTYPE);
+WiFiClient espClient;
+PubSubClient client(espClient);
+ 
+unsigned long lastMsg = 0;
+const long interval = 2000;
+ 
+double arredonda1(float valor)
+{
+    return (double)lround(valor * 10.0) / 10.0;
+}
+ 
+void callback(char* topic, byte* payload, unsigned int length)
+{
+    // Alocação dinâmica segura na stack e terminação da string
+    char msg[length + 1];
+    memcpy(msg, payload, length);
+    msg[length] = '\0';
+    Serial.printf("Comando recebido no topico %s: %s\n", topic, msg);
+    if (strcmp(msg, "device033@on|") == 0)
+    {
+        digitalWrite(LED_PIN, HIGH);
+        Serial.println("Ação: LED LIGADO");
+    }
+    else if (strcmp(msg, "device033@off|") == 0)
+    {
+        digitalWrite(LED_PIN, LOW);
+        Serial.println("Ação: LED DESLIGADO");
+    }
+    else
+    {
+        Serial.println("Ação: Comando não reconhecido. Ignorado.");
+    }
+}
+ 
+void setup()
+{
+    Serial.begin(115200);
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, LOW);
+    dht.begin();
+    WiFi.begin(ssid, password);
+    Serial.print("Conectando WiFi");
+    while (WiFi.status() != WL_CONNECTED)
+    {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println("\nWiFi Conectado!");
+    client.setServer(mqtt_server, 1883);
+    client.setCallback(callback);
+}
+ 
+void reconnect()
+{
+    while (!client.connected())
+    {
+        Serial.print("Conectando ao MQTT...");
+        char clientId[30];
+        snprintf(clientId, sizeof(clientId), "ESP32_Wokwi_%04X", random(0xffff));
+        if (client.connect(clientId))
+        {
+            Serial.println("Conectado!");
+            // Assinatura de tópico para poder receber os comandos de ligar/desligar o LED
+            client.subscribe(topico_comando);
+        }
+        else
+        {
+            Serial.print("Falha, rc=");
+            Serial.print(client.state());
+            Serial.println(" Retentando em 5s...");
+            delay(5000);
+        }
+    }
+}
+ 
+void loop()
+{
+    if (!client.connected()) reconnect();
+    client.loop();
+ 
+    unsigned long now = millis();
+    if (now - lastMsg > interval)
+    {
+        lastMsg = now;
+        float t = dht.readTemperature();
+        float h = dht.readHumidity();
+        // Leitura e mapeamento da luminosidade (0 a 100%)
+        int luz = map(analogRead(LDR_PIN), 0, 4095, 0, 100);
+        if (isnan(t) || isnan(h))
+        {
+            Serial.println("Falha ao ler o DHT!");
+            return;
+        }
+ 
+        // Monta o JSON com os três dados exigidos
+        JsonDocument doc;
+        doc["temperatura"] = arredonda1(t);
+        doc["umidade"] = arredonda1(h);
+        doc["luminosidade"] = luz;
+ 
+        char buffer[128]; // Aumentado para garantir que os três dados caibam
+        size_t n = serializeJson(doc, buffer, sizeof(buffer));
+ 
+        if (n == 0 || n >= sizeof(buffer))
+        {
+            Serial.println("Erro: JSON nao coube no buffer.");
+            return;
+        }
+ 
+        if (client.publish(topico_telemetria, buffer))
+        {
+            Serial.printf("Publicado: %s\n", buffer);
+        }
+        else
+        {
+            Serial.println("Falha ao publicar.");
+        }
+    }
+}
