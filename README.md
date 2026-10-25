@@ -125,6 +125,7 @@ Nesta etapa o sistema foi expandido para utilização de conceitos de Internet d
 ---
  
 # Nome dos Integrantes Turma:1ESPQ
+
 - Guilherme Pereira RM:573360
 - Gustavo Bidin RM:570272
 - Gustavo Leal RM:569361
